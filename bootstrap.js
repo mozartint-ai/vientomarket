@@ -28,14 +28,18 @@ async function loadPublicSettings(){
 }
 
 async function loadAdminState(){
-  const [{data:state,error:stateError},{data:orders,error:orderError}]=await Promise.all([
+  const [{data:state,error:stateError},{data:orders,error:orderError},{data:requests,error:requestError},{data:subscribers,error:subscriberError}]=await Promise.all([
     client.from('viento_app_state').select('key,value'),
-    client.from('viento_orders').select('*').order('date',{ascending:false})
+    client.from('viento_orders').select('*').order('date',{ascending:false}),
+    client.from('viento_service_requests').select('*').order('created_at',{ascending:false}),
+    client.from('viento_newsletter_subscribers').select('id,email,status,source,consented_at,created_at').order('created_at',{ascending:false})
   ]);
   if(stateError)throw stateError;
   if(orderError)throw orderError;
+  if(requestError)throw requestError;
+  if(subscriberError)throw subscriberError;
   const remoteKeys=new Set((state||[]).map(row=>row.key));
-  const managedKeys=['viento-admin-discounts','viento-admin-drafts','viento-admin-abandoned','viento-admin-returns','viento-admin-collections','viento-admin-campaigns','viento-admin-payouts','viento-admin-channels','viento-admin-installed-apps','viento-admin-custom-apps','viento-admin-customers','viento-admin-activity'];
+  const managedKeys=['viento-admin-discounts','viento-admin-drafts','viento-admin-abandoned','viento-admin-returns','viento-admin-collections','viento-admin-campaigns','viento-admin-payouts','viento-admin-channels','viento-admin-installed-apps','viento-admin-custom-apps','viento-admin-customers','viento-admin-activity','viento-shipping-zones','viento-payment-methods','viento-tax-settings','viento-notification-rules'];
   managedKeys.filter(key=>!remoteKeys.has(key)).forEach(key=>localStorage.removeItem(key));
   (state||[]).forEach(row=>localStorage.setItem(row.key,JSON.stringify(row.value)));
   localStorage.setItem('viento-admin-orders',JSON.stringify((orders||[]).map(row=>({
@@ -45,6 +49,39 @@ async function loadAdminState(){
     trackingCompany:row.tracking_company||'',trackingNumber:row.tracking_number||'',
     paymentProvider:row.payment_provider||'',paymentReference:row.payment_reference||''
   }))));
+  localStorage.setItem('viento-service-requests',JSON.stringify(requests||[]));
+  localStorage.setItem('viento-newsletter-subscribers',JSON.stringify(subscribers||[]));
+}
+
+function normalizeEmail(email){return String(email||'').trim().toLocaleLowerCase('tr-TR').slice(0,320)}
+
+async function subscribeNewsletter(email){
+  const normalized=normalizeEmail(email);
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))throw new Error('Geçerli bir e-posta adresi girin.');
+  const {error}=await client.from('viento_newsletter_subscribers').insert({email:normalized,status:'active',source:'storefront',consented_at:new Date().toISOString()});
+  if(error&&error.code!=='23505')throw error;
+  return{email:normalized,existing:error?.code==='23505'};
+}
+
+async function submitServiceRequest(values){
+  const request={
+    service:String(values.service||''),name:String(values.name||'').trim().slice(0,160),
+    email:normalizeEmail(values.email),phone:String(values.phone||'').trim().slice(0,40),
+    city:String(values.city||'').trim().slice(0,100),message:String(values.message||'').trim().slice(0,1500),status:'new'
+  };
+  if(request.name.length<2)throw new Error('Ad soyad alanını doldurun.');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(request.email))throw new Error('Geçerli bir e-posta adresi girin.');
+  if(request.phone.length<7)throw new Error('Geçerli bir telefon numarası girin.');
+  if(request.message.length<10)throw new Error('Talebinizi en az 10 karakterle açıklayın.');
+  const {error}=await client.from('viento_service_requests').insert(request);
+  if(error)throw error;
+  return true;
+}
+
+async function updateServiceRequestStatus(id,status){
+  if(!['new','contacted','closed'].includes(status))throw new Error('Geçersiz talep durumu');
+  const {error}=await client.from('viento_service_requests').update({status,updated_at:new Date().toISOString()}).eq('id',id);
+  if(error)throw error;
 }
 
 async function saveState(key,value){
@@ -68,12 +105,6 @@ async function saveOrders(orders){
 async function saveProduct(product){
   const {error}=await client.from('viento_catalog_products').upsert({product_id:product.id,data:product,active:product.active!==false,updated_at:new Date().toISOString()},{onConflict:'product_id'});
   if(error)throw error;
-}
-
-async function placeOrder(order){
-  const {data,error}=await client.rpc('viento_place_order',{p_order:order});
-  if(error)throw error;
-  return data;
 }
 
 async function demoCheckout(order,provider,scenario='success'){
@@ -170,15 +201,15 @@ async function isAdmin(){
 }
 
 window.VientoDB={
-  client,saveState,saveProduct,placeOrder,demoCheckout,uploadCatalogImage,reportSyncError,
+  client,saveState,saveProduct,demoCheckout,uploadCatalogImage,subscribeNewsletter,submitServiceRequest,updateServiceRequestStatus,reportSyncError,
   signOut:()=>client.auth.signOut()
 };
 
 window.VientoAuth={
   getSession:async()=>{const {data,error}=await client.auth.getSession();if(error)throw error;return data.session},
   signIn:async(email,password)=>{const {data,error}=await client.auth.signInWithPassword({email,password});if(error)throw error;return data},
-  signUp:async({email,password,fullName,phone})=>{const {data,error}=await client.auth.signUp({email,password,options:{data:{full_name:fullName,phone},emailRedirectTo:'https://viento-market-2026.vercel.app/#account'}});if(error)throw error;return data},
-  signInWithGoogle:async()=>{const {data,error}=await client.auth.signInWithOAuth({provider:'google',options:{redirectTo:'https://viento-market-2026.vercel.app/#account'}});if(error)throw error;return data},
+  signUp:async({email,password,fullName,phone})=>{const {data,error}=await client.auth.signUp({email,password,options:{data:{full_name:fullName,phone},emailRedirectTo:`${location.origin}/#account`}});if(error)throw error;return data},
+  signInWithGoogle:async()=>{const {data,error}=await client.auth.signInWithOAuth({provider:'google',options:{redirectTo:`${location.origin}/#account`}});if(error)throw error;return data},
   signOut:()=>client.auth.signOut(),getCustomerAccount,saveCustomerProfile,saveCustomerAddress,deleteCustomerAddress,
   onAuthStateChange:callback=>client.auth.onAuthStateChange(callback)
 };
@@ -222,7 +253,7 @@ async function waitForAdmin(){
       const values=new FormData(form),email=String(values.get('email')||''),password=String(values.get('password')||''),code=String(values.get('bootstrapCode')||'').trim();
       try{
         if(!code)throw new Error('İlk yönetici hesabı için kurulum kodu gerekli.');
-        const {data,error}=await client.auth.signUp({email,password,options:{data:{full_name:'Viento Admin'},emailRedirectTo:'https://viento-market-2026.vercel.app/admin'}});
+        const {data,error}=await client.auth.signUp({email,password,options:{data:{full_name:'Viento Admin'},emailRedirectTo:`${location.origin}/admin`}});
         if(error)throw error;
         if(!data.session){setAuthMessage('Doğrulama bağlantısı e-posta adresinize gönderildi. Doğruladıktan sonra giriş yapın.','success');return}
         await finish(code);
