@@ -39,6 +39,7 @@ Object.entries(catalog).forEach(([category,group],categoryIndex)=>group.names.fo
 
 function readStoreJSON(key,fallback){try{return JSON.parse(localStorage.getItem(key)||JSON.stringify(fallback))}catch{return fallback}}
 function readStoreArray(key){const value=readStoreJSON(key,[]);return Array.isArray(value)?value:[]}
+function assetUrl(value){const url=String(value||'').trim();if(!url||/^(?:https?:|data:|blob:|\/)/i.test(url))return url;return`/${url.replace(/^\.\//,'')}`}
 const remoteProducts=Array.isArray(window.VientoRemoteProducts)&&window.VientoRemoteProducts.length?window.VientoRemoteProducts:null;
 if(remoteProducts)products.splice(0,products.length,...remoteProducts);
 const adminOverrides=remoteProducts?{}:readStoreJSON('viento-admin-overrides',{});
@@ -57,8 +58,8 @@ products.forEach(product=>{
 });
 if(!remoteProducts)readStoreJSON('viento-admin-custom-products',[]).forEach(product=>products.push(product));
 products.forEach((product,index)=>{
-  product.id=Number(product.id)||index+1;product.name=String(product.name||'Adsız ürün');product.category=String(product.category||'Diğer');product.image=String(product.image||'');product.price=Math.max(0,Number(product.price)||0);product.oldPrice=Number(product.oldPrice)>product.price?Number(product.oldPrice):null;
-  product.variants=(Array.isArray(product.variants)?product.variants:[]).map((variant,variantIndex)=>({...variant,name:String(variant?.name||`Varyasyon ${variantIndex+1}`),hex:String(variant?.hex||'#d8d2c8'),image:String(variant?.image||product.image),sku:String(variant?.sku||`VNT-${product.id}-${variantIndex+1}`),stock:Math.max(0,Number(variant?.stock)||0)}));
+  product.id=Number(product.id)||index+1;product.name=String(product.name||'Adsız ürün');product.category=String(product.category||'Diğer');product.image=assetUrl(product.image);product.price=Math.max(0,Number(product.price)||0);product.oldPrice=Number(product.oldPrice)>product.price?Number(product.oldPrice):null;
+  product.variants=(Array.isArray(product.variants)?product.variants:[]).map((variant,variantIndex)=>({...variant,name:String(variant?.name||`Varyasyon ${variantIndex+1}`),hex:String(variant?.hex||'#d8d2c8'),image:assetUrl(variant?.image||product.image),sku:String(variant?.sku||`VNT-${product.id}-${variantIndex+1}`),stock:Math.max(0,Number(variant?.stock)||0)}));
 });
 window.VientoAdminSeed=products;
 function variantImage(product,variant){return variant?.image||product.image}
